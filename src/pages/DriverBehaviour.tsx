@@ -19,6 +19,7 @@ export default function DriverBehavior() {
     const [session, setSession] = useState<ort.InferenceSession | null>(null);
     const [loading, setLoading] = useState(true);
     const [output, setOutput] = useState<any>(null);
+    const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
     useEffect(() => {
         async function loadModel() {
@@ -88,6 +89,8 @@ export default function DriverBehavior() {
         const file = e.target.files?.[0];
         if (!file) return;
 
+        setPreviewUrl(URL.createObjectURL(file));
+
         const inputTensor = await preprocessImage(file);
 
         const feeds: Record<string, ort.Tensor> = {};
@@ -134,21 +137,30 @@ export default function DriverBehavior() {
             {!loading && session && (
                 <>
                     <input type="file" accept="image/*" onChange={handleImageUpload} />
+                    {previewUrl && (
+                        <div style={{ marginTop: 20 }}>
+                            <h3>Image Preview</h3>
+                            <img src={previewUrl} alt="preview" style={{ width: "100%", borderRadius: 8 }} />
+                        </div>
+                    )}
+
                     {output && (
                         <div style={{ marginTop: 20 }}>
                             <h3>Prediction</h3>
                             <p><strong>Top class:</strong> c{output.topIndex} - {output.topLabel}</p>
                             <p><strong>Latency:</strong> {output.latencyMs} ms</p>
 
-                            <h4>Class confidences (softmax)</h4>
-                            <pre style={{ background: "#eee", padding: 10 }}>
-                            {JSON.stringify(output.softmax, null, 2)}
-                            </pre>
-
-                            <h4>Raw logits</h4>
-                            <pre style={{ background: "#eee", padding: 10 }}>
-                            {JSON.stringify(output.logits, null, 2)}
-                            </pre>
+                            <h3>Confidence</h3>
+                            {output.softmax.map((conf: number, i: number) => (
+                                <div key={i} style={{ marginBottom: 8 }}>
+                                    <div style={{ fontSize: 14, marginBottom: 4 }}>
+                                        {i}: {DRIVER_CLASSES[i]} - {(conf * 100).toFixed(1)}%
+                                    </div>
+                                    <div style={{ height: 10, background: "#ddd", borderRadius: 4, overflow: "hidden" }}>
+                                        <div style={{ width: `${conf * 100}%`, height: "100%", background: i === output.topIndex ? "#4cbc50" : "#2173e6" }} />
+                                    </div>
+                                </div>
+                            ))}
                         </div>
                     )}
                 </>
