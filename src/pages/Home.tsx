@@ -10,7 +10,10 @@ export default function Home() {
         label="Driver Behaviour Prediction"
       />
 
-
+      <ModelLinkButton
+        to="/character-recognition"
+        label="Character Recognition"
+      />
     </div>
   );
 }
