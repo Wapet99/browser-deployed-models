@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import * as ort from "onnxruntime-web";
 
-const CLASSES = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".split("");
+const CLASSES = [
+  "0","1","2","3","4","5","6","7","8","9",
+  "A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z",
+  "a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q","r","s","t","u","v","w","x","y","z"
+];
 
 export default function CharacterRecognition() {
   const [session, setSession] = useState<ort.InferenceSession | null>(null);
@@ -19,6 +23,7 @@ export default function CharacterRecognition() {
     async function loadModel() {
       try {
         const modelPath = `${import.meta.env.BASE_URL}models/character_recognition.onnx`;
+        console.log("Loading model from:", modelPath);
 
         const s = await ort.InferenceSession.create(modelPath, {
           executionProviders: ["wasm"],
