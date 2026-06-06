@@ -12,6 +12,7 @@ export default function CharacterRecognition() {
   const [loading, setLoading] = useState(true);
   const [output, setOutput] = useState<any>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [processedPreviewUrl, setProcessedPreviewUrl] = useState<string | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const drawing = useRef(false);
@@ -62,7 +63,7 @@ export default function CharacterRecognition() {
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
 
-    ctx.fillStyle = "black";
+    ctx.fillStyle = "white";
     ctx.beginPath();
     ctx.arc(x, y, 8, 0, Math.PI * 2);
     ctx.fill();
@@ -72,37 +73,147 @@ export default function CharacterRecognition() {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d")!;
-    ctx.fillStyle = "white";
+    ctx.fillStyle = "black";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
   }
 
   // -----------------------------
   // Preprocess image (upload or canvas)
   // -----------------------------
-  async function preprocessImageFromUrl(url: string): Promise<ort.Tensor> {
+  async function preprocessImageFromUrl(url: string, onDebugImage?: (url: string) => void): Promise<ort.Tensor> {
     return new Promise((resolve) => {
       const img = new Image();
       img.src = url;
 
       img.onload = () => {
-        const canvas = document.createElement("canvas");
-        canvas.width = 28;
-        canvas.height = 28;
+        // Step 1: Draw original image to a working canvas
+        const srcCanvas = document.createElement("canvas");
+        srcCanvas.width = 200;
+        srcCanvas.height = 200;
+        const srcCtx = srcCanvas.getContext("2d")!;
+        srcCtx.drawImage(img, 0, 0, 200, 200);
 
-        const ctx = canvas.getContext("2d")!;
-        ctx.drawImage(img, 0, 0, 28, 28);
+        const srcData = srcCtx.getImageData(0, 0, 200, 200);
+        const pixels = srcData.data;
 
-        const { data } = ctx.getImageData(0, 0, 28, 28);
-
-        const floatData = new Float32Array(1 * 28 * 28);
-
-        for (let i = 0; i < 28 * 28; i++) {
-          const pixel = data[i * 4]; // grayscale
-          floatData[i] = pixel / 255;
+        // Step 2: Convert to grayscale
+        const gray = new Float32Array(200 * 200);
+        for (let i = 0; i < 200 * 200; i++) {
+          const r = pixels[i * 4];
+          const g = pixels[i * 4 + 1];
+          const b = pixels[i * 4 + 2];
+          const luminance = 0.299 * r + 0.587 * g + 0.114 * b;
+          gray[i] = luminance / 255;
         }
 
-        const tensor = new ort.Tensor("float32", floatData, [1, 1, 28, 28]);
-        resolve(tensor);
+        // Step 3: Find bounding box of non‑zero pixels
+        let minX = 200, minY = 200, maxX = 0, maxY = 0;
+        for (let y = 0; y < 200; y++) {
+          for (let x = 0; x < 200; x++) {
+            const v = gray[y * 200 + x];
+            if (v > 0.05) { // threshold
+              if (x < minX) minX = x;
+              if (x > maxX) maxX = x;
+              if (y < minY) minY = y;
+              if (y > maxY) maxY = y;
+            }
+          }
+        }
+
+        // Handle blank canvas
+        if (minX > maxX || minY > maxY) {
+          const blank = new Float32Array(28 * 28);
+          resolve(new ort.Tensor("float32", blank, [1, 1, 28, 28]));
+          return;
+        }
+
+        const width = maxX - minX + 1;
+        const height = maxY - minY + 1;
+
+        // Step 4: Crop to bounding box
+        const cropCanvas = document.createElement("canvas");
+        cropCanvas.width = width;
+        cropCanvas.height = height;
+        const cropCtx = cropCanvas.getContext("2d")!;
+        const cropImageData = cropCtx.createImageData(width, height);
+
+        for (let y = 0; y < height; y++) {
+          for (let x = 0; x < width; x++) {
+            const v = gray[(y + minY) * 200 + (x + minX)] * 255;
+            const idx = (y * width + x) * 4;
+            cropImageData.data[idx] = v;
+            cropImageData.data[idx + 1] = v;
+            cropImageData.data[idx + 2] = v;
+            cropImageData.data[idx + 3] = 255;
+          }
+        }
+        cropCtx.putImageData(cropImageData, 0, 0);
+
+        // Step 5: Resize to 20×20 (preserving aspect ratio)
+        const targetCanvas = document.createElement("canvas");
+        targetCanvas.width = 20;
+        targetCanvas.height = 20;
+        const targetCtx = targetCanvas.getContext("2d")!;
+        targetCtx.drawImage(cropCanvas, 0, 0, 20, 20);
+
+        // Step 6: Pad to 28×28
+        const finalCanvas = document.createElement("canvas");
+        finalCanvas.width = 28;
+        finalCanvas.height = 28;
+        const finalCtx = finalCanvas.getContext("2d")!;
+
+        finalCtx.fillStyle = "black";
+        finalCtx.fillRect(0, 0, 28, 28);
+
+        const padX = Math.floor((28 - 20) / 2);
+        const padY = Math.floor((28 - 20) / 2);
+        finalCtx.drawImage(targetCanvas, padX, padY);
+
+        // Step 7: Center using center of mass
+        const finalData = finalCtx.getImageData(0, 0, 28, 28);
+        const f = finalData.data;
+
+        let sum = 0, sumX = 0, sumY = 0;
+        for (let y = 0; y < 28; y++) {
+          for (let x = 0; x < 28; x++) {
+            const v = f[(y * 28 + x) * 4] / 255;
+            sum += v;
+            sumX += x * v;
+            sumY += y * v;
+          }
+        }
+
+        if (sum > 0) {
+          const cx = sumX / sum;
+          const cy = sumY / sum;
+          const shiftX = Math.round(14 - cx);
+          const shiftY = Math.round(14 - cy);
+
+          const shiftedCanvas = document.createElement("canvas");
+          shiftedCanvas.width = 28;
+          shiftedCanvas.height = 28;
+          const shiftedCtx = shiftedCanvas.getContext("2d")!;
+          shiftedCtx.fillStyle = "black";
+          shiftedCtx.fillRect(0, 0, 28, 28);
+          shiftedCtx.drawImage(finalCanvas, shiftX, shiftY);
+
+          finalCtx.drawImage(shiftedCanvas, 0, 0);
+        }
+
+        // Step 8: Convert to tensor
+        const out = finalCtx.getImageData(0, 0, 28, 28);
+        const outData = new Float32Array(28 * 28);
+
+        for (let i = 0; i < 28 * 28; i++) {
+          outData[i] = out.data[i * 4] / 255; // already inverted
+        }
+
+        const inputTensor = new ort.Tensor("float32", outData, [1, 1, 28, 28]);
+        if (onDebugImage) {
+          onDebugImage(finalCanvas.toDataURL("image/png"));
+        }
+
+        resolve(inputTensor);
       };
     });
   }
@@ -113,7 +224,7 @@ export default function CharacterRecognition() {
   async function runInference(url: string) {
     if (!session) return;
 
-    const inputTensor = await preprocessImageFromUrl(url);
+    const inputTensor = await preprocessImageFromUrl(url, (debugUrl) => {setProcessedPreviewUrl(debugUrl)});
 
     const feeds: Record<string, ort.Tensor> = {};
     feeds[session.inputNames[0]] = inputTensor;
@@ -189,7 +300,7 @@ export default function CharacterRecognition() {
             height={200}
             style={{
               border: "1px solid #ccc",
-              background: "white",
+              background: "black",
               borderRadius: 8,
               cursor: "crosshair",
             }}
@@ -208,11 +319,36 @@ export default function CharacterRecognition() {
           {previewUrl && (
             <div style={{ marginTop: 20 }}>
               <h3>Input Preview</h3>
-              <img
-                src={previewUrl}
-                alt="preview"
-                style={{ width: 200, borderRadius: 8 }}
-              />
+              <div style={{ display: "flex", justifyContent: "center", gap: 20 }}>
+                <div>
+                  <div style={{ fontSize: 14, marginBottom: 4 }}>Original</div>
+                  <img
+                    src={previewUrl}
+                    alt="preview"
+                    style={{ 
+                      width: 200, 
+                      background: "black",
+                      borderRadius: 8,
+                    }}
+                  />
+                </div>
+
+                {processedPreviewUrl && (
+                  <div>
+                    <div style={{ fontSize: 14, marginBottom: 4 }}>Processed (28×28)</div>
+                    <img
+                      src={processedPreviewUrl}
+                      alt="processed"
+                      style={{
+                        width: 200,
+                        imageRendering: "pixelated",
+                        background: "black",
+                        borderRadius: 8,
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
